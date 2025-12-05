@@ -1,7 +1,7 @@
 # GREEN: Generative Radiology Report Evaluation and Error Notation
-[**Project Page**](https://stanford-aimi.github.io/green.html) | 
-[**Paper**](https://aclanthology.org/2024.findings-emnlp.21/) | 
-[**🤗 Dataset**](https://huggingface.co/datasets/StanfordAIMI/GREEN) | 
+[**Project Page**](https://stanford-aimi.github.io/green.html) |
+[**Paper**](https://aclanthology.org/2024.findings-emnlp.21/) |
+[**🤗 Dataset**](https://huggingface.co/datasets/StanfordAIMI/GREEN) |
 [**🤗 Model**](https://huggingface.co/StanfordAIMI/GREEN-RadLlama2-7b)
 
 ## Abstract
@@ -9,17 +9,6 @@
 Evaluating radiology reports is a challenging problem as factual correctness is extremely important due to its medical nature. Existing automatic evaluation metrics either suffer from failing to consider factual correctness (e.g., BLEU and ROUGE) or are limited in their interpretability (e.g., F1CheXpert and F1RadGraph). In this paper, we introduce GREEN (Generative Radiology Report Evaluation and Error Notation), a radiology report generation metric that leverages the natural language understanding of language models to identify and explain clinically significant errors in candidate reports, both quantitatively and qualitatively. Compared to current metrics, GREEN offers a score aligned with expert preferences, human interpretable explanations of clinically significant errors, enabling feedback loops with end-users, and a lightweight open-source method that reaches the performance of commercial counterparts. We validate our GREEN metric by comparing it to GPT-4, as well as to the error counts of 6 experts and the preferences of 2 experts. Our method demonstrates not only a higher correlation with expert error counts but simultaneously higher alignment with expert preferences when compared to previous approaches.
 
 ## Installation
-Python 3.12.1 (for now)
-```bash
-pip install green_score
-```
-or
-```bash
-git clone https://github.com/Stanford-AIMI/GREEN.git
-cd GREEN
-pip install -e .
-```
-or 
 ```bash
 git clone https://github.com/Stanford-AIMI/GREEN.git
 cd GREEN
@@ -29,6 +18,15 @@ pip install -e .
 ```
 
 ## Usage
+
+To use Azure, create a config.secret.json file with
+```
+{
+    "azure_openai": {
+        "api_key": <your-api-key>
+    }
+}
+```
 
 ```python
 from green_score import GREEN
@@ -44,9 +42,7 @@ hyps = [
     "Endotracheal and nasogastric tubes have been removed. Changes of median sternotomy, with continued leftward displacement of the fourth inferiomost sternal wire. There is continued moderate-to-severe enlargement of the cardiac silhouette. Pulmonary aeration is slightly improved, with residual left lower lobe atelectasis. Stable central venous congestion and interstitial pulmonary edema. Small bilateral pleural effusions are unchanged.",
 ]
 
-model_name = "StanfordAIMI/GREEN-radllama2-7b"
-
-green_scorer = GREEN(model_name, output_dir=".")
+green_scorer = GREEN(use_azure=True, output_dir=".", verbose=True)
 mean, std, green_score_list, summary, result_df = green_scorer(refs, hyps)
 print(green_score_list)
 print(summary)
@@ -66,8 +62,8 @@ The individual error counts and number of matched findings are summarized in `in
 
 ## Benchmark
 
-All scores are reported on the Internal Test (GPT-4 Annotation) dataset. 
-  
+All scores are reported on the Internal Test (GPT-4 Annotation) dataset.
+
 | Language Model | Data |  |  | $\mathrm{MAE} \pm \mathrm{STD}$ |  | Accuracy $\uparrow$ |  |  |  |  |  |BertScore | Time/sample (secs) | Batch Size* |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 |  | PreRad | CXR | $\mathrm{MM}$ | $\Delta$ Sig. Error $\downarrow$ <br> $7.03 \pm 1.16$ | $\Delta$ Insig. Error $\downarrow$ <br> $0.47 \pm 0.55$ | (a) | (b) | (c) | (d) | (e) | (f) | | |  |
@@ -83,7 +79,7 @@ All scores are reported on the Internal Test (GPT-4 Annotation) dataset.
 | GREEN GPT-4 |  |  |  | $1.51 \pm 1.29$ | $0.52 \pm 0.55$ | 0.32 | 0.40 | 0.65 | 0.59 | 0.68 | 0.70 | | | |
 
 Please see the [error subcategories for (a)-(f)](https://github.com/Stanford-AIMI/GREEN/blob/4e9e939c06761e13d3d520a6434ee7f5c8cded3e/green_score/green.py#L63).
-We are working on benchmarking the new models. 
+We are working on benchmarking the new models.
 
 ## Testing
 ```bash

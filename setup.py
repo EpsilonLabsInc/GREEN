@@ -30,6 +30,7 @@ setup(
         "pandas",
         "numpy<2",
         "pytest",
+        "openai>1",
     ],
     # python_requires='>=3.9,<=3.10.13',
     python_requires="==3.12.1",

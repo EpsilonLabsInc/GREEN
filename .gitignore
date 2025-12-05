@@ -4,7 +4,6 @@
 .venv
 .vscode
 flattened**
-run.py
 results**
 **6_valid**
 **50_samples**
@@ -14,3 +13,5 @@ results**
 **wandb**
 finetune_**
 .cache**
+
+config.secret.json

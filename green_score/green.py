@@ -6,11 +6,14 @@ import pandas as pd
 from datasets import Dataset
 from datasets.distributed import split_dataset_by_node
 import os
+import json
 from tqdm import tqdm
 import numpy as np
 import time
 import sys
 import warnings
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import necessary functions (ensure these are available in your environment)
 from green_score.utils import (
@@ -27,6 +30,21 @@ from transformers.utils import logging
 logging.get_logger("transformers").setLevel(logging.ERROR)
 
 
+def load_azure_config(config_path=None):
+    """Load Azure OpenAI configuration from config.json file."""
+    if config_path is None:
+        # Look for config.json in the project root (parent of green_score)
+        config_path = Path(__file__).parent.parent / "config.json"
+
+    if not Path(config_path).exists():
+        return None
+
+    with open(config_path, "r") as f:
+        config = json.load(f)
+
+    return config.get("azure_openai", None)
+
+
 def get_rank():
     if not dist.is_initialized():
         return 0
@@ -35,6 +53,40 @@ def get_rank():
 
 def is_main_process():
     return get_rank() == 0
+
+
+def load_config(config_path=None):
+    """Load configuration from config.json and config.secret.json files."""
+    if config_path is None:
+        # Look for config.json in the project root (parent of green_score)
+        config_path = Path(__file__).parent.parent / "config.json"
+
+    if not Path(config_path).exists():
+        return None, None, False
+
+    with open(config_path, "r") as f:
+        config = json.load(f)
+
+    azure_config = config.get("azure_openai", {})
+    batch_size = config.get("batch_size", 8)
+    parallel = config.get("parallel", False)
+
+    # Load secrets from config.secret.json
+    secret_path = Path(config_path).parent / "config.secret.json"
+    if secret_path.exists():
+        with open(secret_path, "r") as f:
+            secret_config = json.load(f)
+        # Merge secret config into azure_config
+        if "azure_openai" in secret_config:
+            azure_config.update(secret_config["azure_openai"])
+
+    return azure_config if azure_config else None, batch_size, parallel
+
+
+def load_azure_config(config_path=None):
+    """Load Azure OpenAI configuration from config.json and config.secret.json files."""
+    azure_config, _, _ = load_config(config_path)
+    return azure_config
 
 
 def tqdm_on_main(*args, **kwargs):
@@ -47,15 +99,33 @@ def tqdm_on_main(*args, **kwargs):
 
 class GREEN:
     def __init__(
-        self, model_name=None, output_dir=".", cpu=False, compute_summary_stats=True
+        self,
+        model_name=None,
+        output_dir=".",
+        cpu=False,
+        compute_summary_stats=True,
+        use_azure=False,
+        azure_config_path=None,
+        verbose=False,
     ):
         super().__init__()
+        self.verbose = verbose
+        if self.verbose:
+            print("[VERBOSE] Initializing GREEN scorer...")
         warnings.filterwarnings(
             "ignore", message="A decoder-only architecture is being used*"
         )
         self.cpu = cpu
         self.output_dir = output_dir
-        self.batch_size = 8
+
+        # Load batch_size from config
+        _, config_batch_size, config_parallel = load_config(azure_config_path)
+        self.batch_size = config_batch_size
+        self.parallel = config_parallel
+        if self.verbose:
+            print(f"[VERBOSE] Batch size: {self.batch_size}")
+            print(f"[VERBOSE] Parallel requests: {self.parallel}")
+
         self.max_length = 2048
         self.categories = [
             "Clinically Significant Errors",
@@ -75,7 +145,18 @@ class GREEN:
         self.green_scores = None
         self.error_counts = None
 
-        if torch.cuda.is_available() and torch.cuda.device_count() > 1 and not self.cpu:
+        # Azure OpenAI support
+        self.use_azure = use_azure
+        self.azure_client = None
+        self.azure_deployment = None
+
+        if use_azure:
+            if self.verbose:
+                print("[VERBOSE] use_azure=True, initializing Azure OpenAI client...")
+            self._init_azure_client(azure_config_path)
+        elif (
+            torch.cuda.is_available() and torch.cuda.device_count() > 1 and not self.cpu
+        ):
             if not dist.is_initialized():
                 dist.init_process_group(
                     backend="nccl",
@@ -87,7 +168,7 @@ class GREEN:
                     )
         self.model = None
         self.tokenizer = None
-        if model_name:
+        if model_name and not use_azure:
             self.model_name = model_name.split("/")[-1]
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
@@ -119,19 +200,80 @@ class GREEN:
 
         self.compute_summary_stats = compute_summary_stats
 
+    def _init_azure_client(self, config_path=None):
+        """Initialize Azure OpenAI client from config file."""
+        if self.verbose:
+            print("[VERBOSE] Loading Azure OpenAI configuration...")
+        try:
+            from openai import AzureOpenAI
+        except ImportError:
+            raise ImportError(
+                "openai package is required for Azure OpenAI support. "
+                "Install it with: pip install openai"
+            )
+
+        azure_config = load_azure_config(config_path)
+        if self.verbose:
+            print(
+                f"[VERBOSE] Azure config loaded: endpoint={azure_config.get('endpoint') if azure_config else None}"
+            )
+        if azure_config is None:
+            raise ValueError(
+                "Azure OpenAI config not found. Please create a config.json file "
+                "in the project root with azure_openai configuration."
+            )
+
+        # Allow environment variable to override config file api_key
+        api_key = os.environ.get("AZURE_OPENAI_API_KEY", azure_config.get("api_key"))
+        if api_key == "<your-api-key>":
+            api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "Azure OpenAI API key not configured. Set AZURE_OPENAI_API_KEY "
+                    "environment variable or update config.json."
+                )
+
+        self.model_name = azure_config.get("model_name", "gpt-5.1")
+        self.azure_deployment = azure_config.get("deployment", self.model_name)
+
+        self.azure_client = AzureOpenAI(
+            api_version=azure_config.get("api_version", "2024-12-01-preview"),
+            azure_endpoint=azure_config.get("endpoint"),
+            api_key=api_key,
+        )
+
+        if self.verbose:
+            print(f"[VERBOSE] Azure OpenAI client created successfully")
+            print(
+                f"[VERBOSE] Model: {self.model_name}, Deployment: {self.azure_deployment}"
+            )
+
+        if is_main_process():
+            print(f"Initialized Azure OpenAI client with model: {self.model_name}")
+
     def __call__(self, refs, hyps):
+        if self.verbose:
+            print(
+                f"[VERBOSE] __call__ invoked with {len(refs)} references and {len(hyps)} hypotheses"
+            )
         if is_main_process():
             print("Processing data...making prompts")
 
         dataset = Dataset.from_dict({"reference": refs, "prediction": hyps})
+        if self.verbose:
+            print(f"[VERBOSE] Dataset created with {len(dataset)} examples")
 
         dataset = self.process_data(dataset)
+        if self.verbose:
+            print(f"[VERBOSE] Prompts generated")
         if is_main_process():
             print("Done.")
 
         self.dataset = dataset
 
         t = time.time()
+        if self.verbose:
+            print("[VERBOSE] Starting inference...")
 
         mean, std, green_scores, summary, results_df = self.infer()
 
@@ -139,7 +281,8 @@ class GREEN:
         if is_main_process():
             print("Seconds per example: ", t / len(refs))
 
-        if not is_main_process():
+        # Skip distributed cleanup for Azure mode (no distributed training)
+        if not self.use_azure and not is_main_process():
             print(f"Rank {dist.get_rank()} exiting.")
             dist.destroy_process_group()
             sys.exit()
@@ -160,6 +303,9 @@ class GREEN:
 
     @torch.inference_mode()
     def infer(self):
+        if self.use_azure:
+            return self._infer_azure()
+
         assert self.model is not None and self.tokenizer is not None
 
         if torch.cuda.is_available() and torch.cuda.device_count() > 1 and not self.cpu:
@@ -197,6 +343,134 @@ class GREEN:
             print("Length of prompts and completions are not equal!")
 
         return self.process_results()
+
+    def _infer_azure(self):
+        """Run inference using Azure OpenAI API."""
+        if self.verbose:
+            print("[VERBOSE] _infer_azure started")
+        assert self.azure_client is not None, "Azure client not initialized"
+
+        self.completions = []
+        self.prompts = []
+
+        total_batches = len(self.dataset) // self.batch_size + (
+            1 if len(self.dataset) % self.batch_size else 0
+        )
+        if self.verbose:
+            print(
+                f"[VERBOSE] Processing {len(self.dataset)} examples in {total_batches} batches (batch_size={self.batch_size})"
+            )
+
+        batch_num = 0
+        for batch in tqdm_on_main(
+            iterable=self.dataset.iter(batch_size=self.batch_size),
+            total=len(self.dataset) // self.batch_size,
+        ):
+            batch_num += 1
+            if self.verbose:
+                print(f"[VERBOSE] Processing batch {batch_num}/{total_batches}...")
+            self.prompts.extend(batch["prompt"])
+            self.completions.extend(self._get_azure_response(batch))
+            if self.verbose:
+                print(
+                    f"[VERBOSE] Batch {batch_num} completed. Total completions: {len(self.completions)}"
+                )
+
+        if is_main_process():
+            print("==== End Inference ====")
+
+        if len(self.completions) != len(self.prompts):
+            print("Length of prompts and completions are not equal!")
+
+        return self.process_results()
+
+    def _get_azure_response(self, batch):
+        """Get responses from Azure OpenAI API."""
+        assert "prompt" in batch.keys(), "prompt is not in batch keys"
+
+        prompts = batch["prompt"]
+
+        if self.parallel:
+            return self._get_azure_response_parallel(prompts)
+        else:
+            return self._get_azure_response_sequential(prompts)
+
+    def _get_azure_response_sequential(self, prompts):
+        """Get responses sequentially."""
+        response_list = []
+        for idx, prompt in enumerate(prompts):
+            if self.verbose:
+                print(
+                    f"[VERBOSE] Sending request {idx+1}/{len(prompts)} to Azure OpenAI..."
+                )
+                print(f"[VERBOSE] Prompt length: {len(prompt)} characters")
+            try:
+                response = self.azure_client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        }
+                    ],
+                    max_completion_tokens=self.max_length,
+                    model=self.azure_deployment,
+                    temperature=0,
+                )
+                if self.verbose:
+                    print(f"[VERBOSE] Response received for request {idx+1}")
+                response_text = response.choices[0].message.content
+                response_text = clean_responses(response_text)
+                response_list.append(response_text)
+            except Exception as e:
+                print(f"Error getting Azure response: {e}")
+                response_list.append("")
+
+        return response_list
+
+    def _get_azure_response_parallel(self, prompts):
+        """Get responses in parallel using ThreadPoolExecutor."""
+        if self.verbose:
+            print(f"[VERBOSE] Sending {len(prompts)} requests in parallel...")
+
+        def fetch_single_response(idx_prompt):
+            idx, prompt = idx_prompt
+            try:
+                response = self.azure_client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        }
+                    ],
+                    max_completion_tokens=self.max_length,
+                    model=self.azure_deployment,
+                    temperature=0,
+                )
+                response_text = response.choices[0].message.content
+                response_text = clean_responses(response_text)
+                return idx, response_text
+            except Exception as e:
+                print(f"Error getting Azure response for request {idx+1}: {e}")
+                return idx, ""
+
+        # Use ThreadPoolExecutor for parallel requests
+        results = [None] * len(prompts)
+        with ThreadPoolExecutor(max_workers=len(prompts)) as executor:
+            futures = {
+                executor.submit(fetch_single_response, (i, p)): i
+                for i, p in enumerate(prompts)
+            }
+
+            # Use tqdm for progress tracking
+            pbar = tqdm(as_completed(futures), total=len(prompts), desc="Parallel requests", disable=not self.verbose)
+            for future in pbar:
+                idx, response_text = future.result()
+                results[idx] = response_text
+
+        if self.verbose:
+            print(f"[VERBOSE] All {len(prompts)} parallel requests completed")
+
+        return results
 
     def tokenize_batch_as_chat(self, batch):
         local_rank = int(os.environ.get("LOCAL_RANK", 0)) if not self.cpu else "cpu"
