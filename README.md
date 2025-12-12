@@ -52,6 +52,44 @@ for index, row in result_df.iterrows():
         print(f"{col_name}: {row[col_name]}\n")
     print('-' * 80)
 ```
+
+### Command Line Usage [for epsilon]
+
+You can also run GREEN from the command line on a CSV file. See [full example with output](docs/CLI_EXAMPLE.md).
+
+```bash
+python run.py \
+  --input-csv ~/Downloads/hand_data_filtering.csv \
+  --gt-column answer_gt \
+  --comparison-columns "base,clean_degen,clean_degen_excl_nofindings" \
+  --output-csv green_results.csv \
+  --verbose
+```
+
+**Arguments:**
+- `--input-csv`: Path to your input CSV file
+- `--gt-column`: Column name containing ground truth (reference) texts
+- `--comparison-columns`: Comma-separated list of column names to compare against ground truth
+- `--output-csv`: Path for the output CSV file with results
+- `--verbose`: Enable verbose output (optional)
+
+**Configuration (`config.json`):**
+```json
+{
+    "azure_openai": {
+        "endpoint": "https://your-endpoint.openai.azure.com/",
+        "model_name": "gpt-5.1",
+        "deployment": "gpt-5.1",
+        "api_version": "2024-12-01-preview"
+    },
+    "batch_size": 8,
+    "parallel": true
+}
+```
+
+- `batch_size`: Number of examples to process per batch
+- `parallel`: Set to `true` to send API requests in parallel within each batch
+
 For running inference on the ReXVal dataset download `50_samples_gt_and_candidates.csv` to the folder `inference`from [physionet](https://physionet.org/content/rexval-dataset/1.0.0/) and use the following command:
 ```
 torchrun --nproc_per_node=2 inference/run_get_green_analysis.py

@@ -15,3 +15,5 @@ finetune_**
 .cache**
 
 config.secret.json
+
+*csv
