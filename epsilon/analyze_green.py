@@ -315,49 +315,14 @@ def generate_plot(
     bar_width = 0.35
 
     # Plot count bars on secondary axis
-    if show_acceptance_rate:
-        # Side-by-side bars for count and accepted count
-        bars_count = ax2.bar(
-            x - bar_width / 2,
-            counts,
-            bar_width,
-            color="lightgray",
-            alpha=0.7,
-            label="Sample Count",
-        )
-    else:
-        # Single centered bar for count only
-        bars_count = ax2.bar(
-            x,
-            counts,
-            bar_width,
-            color="lightgray",
-            alpha=0.7,
-            label="Sample Count",
-        )
-
-    # Plot acceptance count bars (overlapping, showing accepted portion)
-    if show_acceptance_rate and acceptance_rates is not None:
-        accepted_counts = (acceptance_rates * counts).astype(int)
-        bars_accepted = ax2.bar(
-            x + bar_width / 2,
-            accepted_counts,
-            bar_width,
-            color="darkorange",
-            alpha=0.7,
-            label="Accepted Count",
-        )
-        # Add acceptance rate labels on top of accepted bars
-        for i, (acc_count, rate) in enumerate(zip(accepted_counts, acceptance_rates)):
-            ax2.text(
-                x[i] + bar_width / 2,
-                acc_count + max(counts) * 0.02,
-                f"{rate:.0%}",
-                ha="center",
-                va="bottom",
-                fontsize=7,
-                color="darkorange",
-            )
+    bars_count = ax2.bar(
+        x,
+        counts,
+        bar_width,
+        color="lightgray",
+        alpha=0.7,
+        label="Sample Count",
+    )
 
     # Plot VLM scores as dots with SEM error bars on primary axis
     ax1.errorbar(
@@ -374,19 +339,40 @@ def generate_plot(
         zorder=5,
     )
 
-    # Primary axis (GREEN score)
+    # Plot acceptance rate as a line on primary axis (same 0-1 scale as GREEN score)
+    if show_acceptance_rate and acceptance_rates is not None:
+        ax1.plot(
+            x,
+            acceptance_rates,
+            "s-",
+            markersize=6,
+            color="darkorange",
+            alpha=0.8,
+            label="Acceptance Rate",
+            zorder=4,
+        )
+        # Add acceptance rate labels
+        for i, rate in enumerate(acceptance_rates):
+            ax1.text(
+                x[i] - 0.15,
+                rate,
+                f"{rate:.0%}",
+                ha="right",
+                va="center",
+                fontsize=8,
+                color="darkorange",
+            )
+
+    # Primary axis (GREEN score and acceptance rate share 0-1 scale)
     ax1.set_xlabel("Version")
-    ax1.set_ylabel("GREEN Score", color="steelblue")
+    ax1.set_ylabel("GREEN Score / Acceptance Rate", color="steelblue")
     ax1.tick_params(axis="y", labelcolor="steelblue")
-    ax1.set_ylim(0.5, 1.1)
+    ax1.set_ylim(0, 1.1)
     ax1.axhline(y=1.0, color="gray", linestyle="--", alpha=0.5)
     ax1.grid(True, alpha=0.3, zorder=0)
 
     # Secondary axis (count)
-    if show_acceptance_rate:
-        ax2.set_ylabel("Sample Count / Acceptance Rate", color="gray")
-    else:
-        ax2.set_ylabel("Sample Count", color="gray")
+    ax2.set_ylabel("Sample Count", color="gray")
     ax2.tick_params(axis="y", labelcolor="gray")
 
     ax1.set_title(f"GREEN Scores by Version (mean ± SEM){title_suffix}")
@@ -407,9 +393,8 @@ def generate_plot(
 
     # Add count labels on bars
     for i, n in enumerate(counts):
-        bar_x = x[i] - bar_width / 2 if show_acceptance_rate else x[i]
         ax2.text(
-            bar_x,
+            x[i],
             n + max(counts) * 0.02,
             f"{int(n)}",
             ha="center",
