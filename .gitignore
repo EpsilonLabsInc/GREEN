@@ -17,3 +17,6 @@ finetune_**
 config.secret.json
 
 *csv
+
+green_score.egg-info
+notebooks/
