@@ -62,7 +62,7 @@ def load_config(config_path=None):
         config_path = Path(__file__).parent.parent / "config.json"
 
     if not Path(config_path).exists():
-        return None, None, False
+        return None, 8, False, 1024, 4096
 
     with open(config_path, "r") as f:
         config = json.load(f)
@@ -70,6 +70,8 @@ def load_config(config_path=None):
     azure_config = config.get("azure_openai", {})
     batch_size = config.get("batch_size", 8)
     parallel = config.get("parallel", False)
+    max_prompt_words = config.get("max_prompt_words", 1024)
+    max_completion_tokens = config.get("max_completion_tokens", 4096)
 
     # Load secrets from config.secret.json
     secret_path = Path(config_path).parent / "config.secret.json"
@@ -80,12 +82,18 @@ def load_config(config_path=None):
         if "azure_openai" in secret_config:
             azure_config.update(secret_config["azure_openai"])
 
-    return azure_config if azure_config else None, batch_size, parallel
+    return (
+        azure_config if azure_config else None,
+        batch_size,
+        parallel,
+        max_prompt_words,
+        max_completion_tokens,
+    )
 
 
 def load_azure_config(config_path=None):
     """Load Azure OpenAI configuration from config.json and config.secret.json files."""
-    azure_config, _, _ = load_config(config_path)
+    azure_config, _, _, _, _ = load_config(config_path)
     return azure_config
 
 
@@ -118,15 +126,24 @@ class GREEN:
         self.cpu = cpu
         self.output_dir = output_dir
 
-        # Load batch_size from config
-        _, config_batch_size, config_parallel = load_config(azure_config_path)
+        # Load config values
+        (
+            _,
+            config_batch_size,
+            config_parallel,
+            config_max_prompt_words,
+            config_max_completion_tokens,
+        ) = load_config(azure_config_path)
         self.batch_size = config_batch_size
         self.parallel = config_parallel
+        self.max_prompt_words = config_max_prompt_words
+        self.max_length = config_max_completion_tokens
         if self.verbose:
             print(f"[VERBOSE] Batch size: {self.batch_size}")
             print(f"[VERBOSE] Parallel requests: {self.parallel}")
+            print(f"[VERBOSE] Max prompt words: {self.max_prompt_words}")
+            print(f"[VERBOSE] Max completion tokens: {self.max_length}")
 
-        self.max_length = 2048
         self.categories = [
             "Clinically Significant Errors",
             "Clinically Insignificant Errors",
@@ -290,10 +307,12 @@ class GREEN:
         return mean, std, green_scores, summary, results_df
 
     def process_data(self, dataset):
+        max_len = self.max_prompt_words
+
         def prompting(examples):
             return {
                 "prompt": [
-                    make_prompt(r, p)
+                    make_prompt(r, p, max_len=max_len)
                     for r, p in zip(examples["reference"], examples["prediction"])
                 ]
             }
@@ -462,7 +481,12 @@ class GREEN:
             }
 
             # Use tqdm for progress tracking
-            pbar = tqdm(as_completed(futures), total=len(prompts), desc="Parallel requests", disable=not self.verbose)
+            pbar = tqdm(
+                as_completed(futures),
+                total=len(prompts),
+                desc="Parallel requests",
+                disable=not self.verbose,
+            )
             for future in pbar:
                 idx, response_text = future.result()
                 results[idx] = response_text

@@ -6,7 +6,7 @@ Combines data processing and visualization for GREEN score analysis.
 Processes analytics CSV files, computes GREEN scores by version, and generates plots.
 
 Usage:
-    python analyze_green.py                           # Default: sample 10 per version
+    python analyze_green.py                           # Default: sample 3 per version
     python analyze_green.py --input /path/to/file.csv
     python analyze_green.py --samples all             # Run all samples
     python analyze_green.py --samples 50              # Sample 50 per version
@@ -60,6 +60,16 @@ def parse_args():
     )
     parser.add_argument(
         "--no-plot", action="store_true", help="Skip generating the plot"
+    )
+    parser.add_argument(
+        "--split-by-acceptance",
+        action="store_true",
+        help="Generate separate plots for accepted and rejected samples (default: False)",
+    )
+    parser.add_argument(
+        "--self-check",
+        action="store_true",
+        help="Perform self-check (report_text vs report_text) sanity check (default: False)",
     )
     return parser.parse_args()
 
@@ -125,7 +135,10 @@ def get_versions_to_process(clean_data: pd.DataFrame, min_version: str) -> list:
 
 
 def compute_green_scores(
-    clean_data: pd.DataFrame, versions: list, samples_per_version: int | None
+    clean_data: pd.DataFrame,
+    versions: list,
+    samples_per_version: int | None,
+    perform_self_check: bool = False,
 ) -> pd.DataFrame:
     """Compute GREEN scores for all versions."""
     print("\nInitializing GREEN scorer...")
@@ -149,7 +162,6 @@ def compute_green_scores(
             print(f"Processing all {len(ver_data)} rows")
 
         refs = ver_data["report_text"].fillna("").astype(str).tolist()
-        hyps_self = ver_data["report_text"].fillna("").astype(str).tolist()
         hyps_vlm = ver_data["generated_vlm_output_text"].fillna("").astype(str).tolist()
         row_numbers = ver_data["row_number"].tolist()
         is_correct_values = (
@@ -158,13 +170,15 @@ def compute_green_scores(
             else [None] * len(ver_data)
         )
 
-        # (1) Sanity check: report_text vs report_text
-        print(f"\n--- (1) Sanity check: report_text vs report_text ---")
-        mean1, std1, scores1, summary1, df1 = green_scorer(refs, hyps_self)
-        print(f"Mean score: {mean1:.4f} (should be ~1.0)")
+        # (1) Optional sanity check: report_text vs report_text
+        if perform_self_check:
+            hyps_self = ver_data["report_text"].fillna("").astype(str).tolist()
+            print(f"\n--- (1) Sanity check: report_text vs report_text ---")
+            mean1, std1, scores1, summary1, df1 = green_scorer(refs, hyps_self)
+            print(f"Mean score: {mean1:.4f} (should be ~1.0)")
 
         # (2) Actual comparison: report_text vs generated_vlm_output_text
-        print(f"\n--- (2) Comparison: report_text vs generated_vlm_output_text ---")
+        print(f"\n--- Comparison: report_text vs generated_vlm_output_text ---")
         mean2, std2, scores2, summary2, df2 = green_scorer(refs, hyps_vlm)
         print(f"Mean score: {mean2:.4f}")
 
@@ -174,11 +188,12 @@ def compute_green_scores(
                 "generation_version": ver,
                 "row_number": row_num,
                 "is_correct": is_correct_values[i],
-                "self_green_score": scores1[i],
-                "self_green_analysis": df1["green_analysis"].iloc[i],
                 "vlm_green_score": scores2[i],
                 "vlm_green_analysis": df2["green_analysis"].iloc[i],
             }
+            if perform_self_check:
+                result["self_green_score"] = scores1[i]
+                result["self_green_analysis"] = df1["green_analysis"].iloc[i]
             # Add error counts for VLM comparison
             for col in df2.columns:
                 if col.startswith("(") or col == "Matched Findings":
@@ -203,27 +218,48 @@ def compute_green_scores(
 
 def print_summary(results_df: pd.DataFrame):
     """Print summary statistics."""
-    fine_grained = (
-        results_df.groupby("generation_version")
-        .agg(
-            {
-                "self_green_score": ["mean", "std", "count"],
-                "vlm_green_score": ["mean", "std"],
-            }
-        )
-        .round(4)
-    )
+    has_self_check = "self_green_score" in results_df.columns
 
-    consolidated = (
-        results_df.groupby("version_major_minor")
-        .agg(
-            {
-                "self_green_score": ["mean", "std", "count"],
-                "vlm_green_score": ["mean", "std"],
-            }
+    if has_self_check:
+        fine_grained = (
+            results_df.groupby("generation_version")
+            .agg(
+                {
+                    "self_green_score": ["mean", "std", "count"],
+                    "vlm_green_score": ["mean", "std"],
+                }
+            )
+            .round(4)
         )
-        .round(4)
-    )
+        consolidated = (
+            results_df.groupby("version_major_minor")
+            .agg(
+                {
+                    "self_green_score": ["mean", "std", "count"],
+                    "vlm_green_score": ["mean", "std"],
+                }
+            )
+            .round(4)
+        )
+    else:
+        fine_grained = (
+            results_df.groupby("generation_version")
+            .agg(
+                {
+                    "vlm_green_score": ["mean", "std", "count"],
+                }
+            )
+            .round(4)
+        )
+        consolidated = (
+            results_df.groupby("version_major_minor")
+            .agg(
+                {
+                    "vlm_green_score": ["mean", "std", "count"],
+                }
+            )
+            .round(4)
+        )
 
     print("\n" + "=" * 80)
     print("FINE-GRAINED SCORES (by exact version)")
@@ -255,6 +291,7 @@ def generate_plot(
     title_suffix: str = "",
     file_suffix: str = "",
     show_acceptance_rate: bool = True,
+    correctness_column: str = "is_correct",
 ):
     """Generate the GREEN scores visualization plot.
 
@@ -264,6 +301,7 @@ def generate_plot(
         title_suffix: Suffix to add to plot title (e.g., " - Accepted Only")
         file_suffix: Suffix to add to filename (e.g., "_accepted")
         show_acceptance_rate: Whether to show acceptance rate bars (default True)
+        correctness_column: Column to use for acceptance rate calculation (default: is_correct)
     """
     if len(results_df) == 0:
         print(f"No data to plot{title_suffix}")
@@ -280,10 +318,10 @@ def generate_plot(
         .round(4)
     )
 
-    # Calculate acceptance rate per version (is_correct == 'true' / total)
-    if "is_correct" in results_df.columns:
+    # Calculate acceptance rate per version based on correctness_column
+    if correctness_column in results_df.columns:
         # Handle string values: 'true' -> True, everything else ('false', 'ERROR', etc.) -> False
-        is_correct_bool = results_df["is_correct"].apply(
+        is_correct_bool = results_df[correctness_column].apply(
             lambda x: str(x).lower() == "true" if pd.notna(x) else False
         )
         acceptance_rates = (
@@ -446,18 +484,20 @@ def main():
         sys.exit(1)
 
     # Compute GREEN scores
-    results_df = compute_green_scores(clean_data, versions, samples_per_version)
+    results_df = compute_green_scores(
+        clean_data, versions, samples_per_version, args.self_check
+    )
 
     # Print summary
     print_summary(results_df)
 
     # Merge GREEN scores back to original dataframe
     score_columns = [
-        "self_green_score",
-        "self_green_analysis",
         "vlm_green_score",
         "vlm_green_analysis",
     ]
+    if args.self_check:
+        score_columns.extend(["self_green_score", "self_green_analysis"])
     # Also include error count columns
     for col in results_df.columns:
         if col.startswith("vlm_(") or col == "vlm_Matched Findings":
@@ -483,38 +523,84 @@ def main():
 
     # Generate plots
     if not args.no_plot:
-        # Plot 1: All data
-        print("\n--- Generating plots ---")
-        generate_plot(results_df, output_path, title_suffix="", file_suffix="")
+        # Create pngs subdirectory
+        pngs_dir = Path(output_path).parent / "pngs"
+        pngs_dir.mkdir(parents=True, exist_ok=True)
+        plot_output_path = str(pngs_dir / Path(output_path).name)
 
-        # Plot 2: Accepted only (is_correct == 'true')
-        if "is_correct" in results_df.columns:
-            accepted_df = results_df[
-                results_df["is_correct"].apply(
+        print("\n--- Generating plots ---")
+
+        # Define correctness modes to plot
+        correctness_modes = [
+            ("is_correct", "is_correct", ""),
+            ("is_findings_correct", "is_findings_correct", "_findings"),
+            ("is_impressions_correct", "is_impressions_correct", "_impressions"),
+            ("is_both_correct", None, "_both"),  # Special case: combined
+        ]
+
+        # Add combined column (is_findings_correct AND is_impressions_correct)
+        if (
+            "is_findings_correct" in results_df.columns
+            and "is_impressions_correct" in results_df.columns
+        ):
+            results_df["is_both_correct"] = results_df.apply(
+                lambda row: (
+                    "true"
+                    if (
+                        str(row.get("is_findings_correct", "")).lower() == "true"
+                        and str(row.get("is_impressions_correct", "")).lower() == "true"
+                    )
+                    else "false"
+                ),
+                axis=1,
+            )
+
+        for mode_name, col_name, file_suffix in correctness_modes:
+            # Use mode_name as column if col_name is None (for combined mode)
+            actual_col = col_name if col_name else mode_name
+
+            if actual_col not in results_df.columns:
+                print(f"  Skipping {mode_name}: column not found")
+                continue
+
+            # Plot with acceptance rate for this mode
+            title_suffix = f" ({mode_name})" if mode_name != "is_correct" else ""
+            generate_plot(
+                results_df,
+                plot_output_path,
+                title_suffix=title_suffix,
+                file_suffix=file_suffix,
+                show_acceptance_rate=True,
+                correctness_column=actual_col,
+            )
+
+            # Plot accepted/rejected splits (optional)
+            if args.split_by_acceptance:
+                is_true = results_df[actual_col].apply(
                     lambda x: str(x).lower() == "true" if pd.notna(x) else False
                 )
-            ]
-            generate_plot(
-                accepted_df,
-                output_path,
-                title_suffix=" - Accepted Only",
-                file_suffix="_accepted",
-                show_acceptance_rate=False,
-            )
+                accepted_df = results_df[is_true]
+                rejected_df = results_df[~is_true]
 
-            # Plot 3: Rejected only (is_correct == 'false')
-            rejected_df = results_df[
-                results_df["is_correct"].apply(
-                    lambda x: str(x).lower() == "false" if pd.notna(x) else False
-                )
-            ]
-            generate_plot(
-                rejected_df,
-                output_path,
-                title_suffix=" - Rejected Only",
-                file_suffix="_rejected",
-                show_acceptance_rate=False,
-            )
+                if len(accepted_df) > 0:
+                    generate_plot(
+                        accepted_df,
+                        plot_output_path,
+                        title_suffix=f" - Accepted Only ({mode_name})",
+                        file_suffix=f"{file_suffix}_accepted",
+                        show_acceptance_rate=False,
+                        correctness_column=actual_col,
+                    )
+
+                if len(rejected_df) > 0:
+                    generate_plot(
+                        rejected_df,
+                        plot_output_path,
+                        title_suffix=f" - Rejected Only ({mode_name})",
+                        file_suffix=f"{file_suffix}_rejected",
+                        show_acceptance_rate=False,
+                        correctness_column=actual_col,
+                    )
 
     print("\nAll done!")
 

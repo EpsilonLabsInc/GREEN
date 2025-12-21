@@ -6,5 +6,7 @@
         "api_version": "2024-12-01-preview"
     },
     "batch_size": 512,
-    "parallel": true
+    "parallel": true,
+    "max_prompt_words": 1024,
+    "max_completion_tokens": 4096
 }

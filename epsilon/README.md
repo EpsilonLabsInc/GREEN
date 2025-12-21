@@ -1,85 +1,124 @@
 # GREEN Score Analysis Tool
 
-Analyze GREEN scores from analytics CSV files, computing scores by version and generating visualizations.
+Analyze GREEN scores from analytics CSV files, compute scores by version, and generate visualizations.
 
 ## GREEN Score Formula
 
 $$\text{GREEN Score} = \frac{\text{Matched Findings}}{\text{Matched Findings} + \sum(\text{Significant Errors})}$$
 
-- **Matched Findings**: Clinically relevant findings in both reference and hypothesis
-- **Significant Errors**: Weighted sum of omissions, hallucinations, and other discrepancies
-- **Range**: 0 to 1 (1.0 = perfect match)
+### Score Components
 
-## Quick Start
+| Component | Description |
+|-----------|-------------|
+| **Matched Findings** | Clinically relevant findings present in both reference and hypothesis |
+| **Significant Errors** | Sum of 6 error subcategories (see below) |
+| **Score Range** | 0 to 1 (1.0 = perfect match, 0 = no matched findings) |
+
+### Significant Error Subcategories
+
+| Code | Error Type |
+|------|------------|
+| (a) | False report of a finding in the candidate |
+| (b) | Missing a finding present in the reference |
+| (c) | Misidentification of a finding's anatomic location/position |
+| (d) | Misassessment of the severity of a finding |
+| (e) | Mentioning a comparison that isn't in the reference |
+| (f) | Omitting a comparison detailing a change from a prior study |
+
+> **Note:** Clinically Insignificant Errors are tracked but **do NOT affect** the GREEN score calculation.
+
+---
+
+## Scripts Overview
+
+| Script | Purpose |
+|--------|---------|
+| `analyze_green.py` | Compute GREEN scores from raw analytics CSV |
+| `plot_green.py` | Regenerate plots from existing CSV (no recomputation) |
+| `plot_green_by_normal.py` | Generate plots split by normal/abnormal reports and body part |
+
+---
+
+## 1. analyze_green.py - Compute GREEN Scores
+
+Processes analytics CSV files, computes GREEN scores using the GREEN model, and generates plots.
+
+### Usage
 
 ```bash
-# From the GREEN project root directory
-cd /Users/ruian/projects/epsilonlabs/GREEN
+# From the epsilon directory
+cd /Users/ruian/projects/epsilonlabs/GREEN/epsilon
 
 # Run with defaults (3 samples per version for testing)
-python epsilon/analyze_green.py
+python analyze_green.py
 
 # Run all samples (full analysis)
-python epsilon/analyze_green.py --samples all
+python analyze_green.py --samples all
 
 # Use a specific input file
-python epsilon/analyze_green.py --input /path/to/analytics.csv
+python analyze_green.py --input /path/to/analytics.csv
 ```
 
-## Arguments
+### Arguments
 
 | Argument | Short | Default | Description |
 |----------|-------|---------|-------------|
-| `--input` | `-i` | `/Users/ruian/Downloads/ANALYTICS_MOST_RECENT.csv` | Path to input analytics CSV file |
+| `--input` | `-i` | `ANALYTICS_MOST_RECENT.csv` | Path to input analytics CSV file |
 | `--samples` | `-s` | `3` | Number of samples per version, or `all` for all samples |
 | `--output` | `-o` | `green_scores_by_version.csv` | Path to output CSV file |
 | `--min-version` | | `0.1.2` | Minimum version to process |
 | `--no-plot` | | | Skip generating plots |
+| `--split-by-acceptance` | | | Generate separate plots for accepted/rejected samples |
+| `--self-check` | | | Perform self-check (report vs itself) sanity check |
 
-## Examples
+### Examples
 
 ```bash
 # Sample 50 rows per version
-python epsilon/analyze_green.py --samples 50
+python analyze_green.py --samples 50
 
 # Run all samples with custom output
-python epsilon/analyze_green.py --samples all --output /tmp/results.csv
+python analyze_green.py --samples all --output /tmp/results.csv
 
 # Process only versions >= 0.2.0
-python epsilon/analyze_green.py --min-version 0.2.0
+python analyze_green.py --min-version 0.2.0
+
+# Run with self-check and acceptance split
+python analyze_green.py --samples all --self-check --split-by-acceptance
 
 # Run without plots (headless mode)
-python epsilon/analyze_green.py --no-plot
+python analyze_green.py --no-plot
 
 # Run in background with all samples
-nohup python epsilon/analyze_green.py --samples all > output.log 2>&1 &
+nohup python analyze_green.py --samples all > output.log 2>&1 &
 ```
 
-## Output
+### Output Files
 
-The script produces:
+#### CSV Files
+| File | Description |
+|------|-------------|
+| `green_scores_by_version.csv` | Processed results only (rows that passed filtering) |
+| `green_scores_by_version_full.csv` | All original rows with `kept_for_green` column and GREEN scores merged |
 
-### CSV Files
-1. **`green_scores_by_version.csv`** - Processed results only (rows that passed filtering)
-2. **`green_scores_by_version_full.csv`** - All original rows with `kept_for_green` column and GREEN scores merged
+#### Plots (in `pngs/` subfolder)
 
-### Plots (3 PNG files)
-1. **`green_scores_by_version_plot.png`** - All data with acceptance rate line
-2. **`green_scores_by_version_plot_accepted.png`** - Accepted samples only (`is_correct == 'true'`)
-3. **`green_scores_by_version_plot_rejected.png`** - Rejected samples only (`is_correct == 'false'`)
+For each correctness mode, the following plots are generated:
 
-Each plot shows:
-- GREEN scores as blue dots with SEM error bars
-- Acceptance rate as orange line (on all-data plot only)
-- Sample counts as gray bars (secondary y-axis)
+| Mode | Base File | Description |
+|------|-----------|-------------|
+| `is_correct` | `*_plot.png` | Based on overall correctness |
+| `is_findings_correct` | `*_plot_findings.png` | Based on findings section correctness |
+| `is_impressions_correct` | `*_plot_impressions.png` | Based on impressions section correctness |
+| `is_both_correct` | `*_plot_both.png` | Both findings AND impressions correct |
 
-### Console Output
-- Summary statistics (fine-grained by exact version, consolidated by major.minor)
-- Comparison of std vs SEM for each version
+With `--split-by-acceptance`, each mode also generates:
+- `*_accepted.png` - Accepted samples only
+- `*_rejected.png` - Rejected samples only
 
-## Data Filtering
+### Data Filtering
 
-Rows are excluded from GREEN scoring if:
+Rows are **excluded** from GREEN scoring if:
 - `report_is_addendum == True` (addendum reports)
 - `report_radiologist_first_name == 'Justin'` (specific radiologist)
 - `report_radiologist_first_name` is NaN
@@ -87,20 +126,136 @@ Rows are excluded from GREEN scoring if:
 
 The `kept_for_green` column in the full output indicates whether each row was included.
 
+---
+
+## 2. plot_green.py - Regenerate Plots
+
+Regenerates plots from an existing `green_scores_by_version_full.csv` without recomputing GREEN scores.
+
+### Usage
+
+```bash
+# Default: uses green_scores_by_version_full.csv in current directory
+python plot_green.py
+
+# With specific input file
+python plot_green.py --input /path/to/green_scores_by_version_full.csv
+
+# Generate accepted/rejected split plots
+python plot_green.py --split-by-acceptance
+```
+
+### Arguments
+
+| Argument | Short | Default | Description |
+|----------|-------|---------|-------------|
+| `--input` | `-i` | `green_scores_by_version_full.csv` | Path to input CSV file |
+| `--output-dir` | `-o` | `pngs/` | Directory for output plots |
+| `--split-by-acceptance` | | | Generate accepted/rejected split plots |
+
+---
+
+## 3. plot_green_by_normal.py - Plots by Report Type
+
+Generates plots split by normal/abnormal reports and by body part.
+
+### Usage
+
+```bash
+# Default: uses green_scores_by_version_full.csv
+python plot_green_by_normal.py
+
+# With acceptance splits
+python plot_green_by_normal.py --split-by-acceptance
+```
+
+### Arguments
+
+| Argument | Short | Default | Description |
+|----------|-------|---------|-------------|
+| `--input` | `-i` | `green_scores_by_version_full.csv` | Path to input CSV file |
+| `--output-dir` | `-o` | `pngs/` | Directory for output plots |
+| `--split-by-acceptance` | | | Generate accepted/rejected split plots |
+
+### Output Structure
+
+```
+pngs/
+├── green_all_plot.png              # All reports
+├── green_all_plot_findings.png     # All reports (is_findings_correct)
+├── green_all_plot_impressions.png  # All reports (is_impressions_correct)
+├── green_all_plot_both.png         # All reports (both correct)
+├── green_normal_plot.png           # Normal reports only
+├── green_abnormal_plot.png         # Abnormal reports only
+├── Chest/                          # Body part subfolder
+│   ├── green_chest_plot.png
+│   ├── green_chest_normal_plot.png
+│   └── green_chest_abnormal_plot.png
+├── Abdomen/
+├── Hand/
+└── ...                             # Other body parts (>100 samples)
+```
+
+---
+
+## Correctness Modes
+
+All plotting scripts support 4 correctness modes for acceptance rate calculation:
+
+| Mode | Column | Description |
+|------|--------|-------------|
+| `is_correct` | `is_correct` | Overall report correctness |
+| `is_findings_correct` | `is_findings_correct` | Findings section correctness |
+| `is_impressions_correct` | `is_impressions_correct` | Impressions section correctness |
+| `is_both_correct` | Computed | `is_findings_correct AND is_impressions_correct` |
+
+Each plot shows:
+- **Blue dots with error bars**: GREEN score mean ± SEM (Standard Error of Mean)
+- **Orange line with squares**: Acceptance rate for the selected correctness mode
+- **Gray bars**: Sample count per version (secondary y-axis)
+
+---
+
 ## Input CSV Requirements
 
 The input CSV must contain these columns:
-- `report_text` - Ground truth radiology report
-- `generated_vlm_output_text` - VLM-generated report to evaluate
-- `generation_version` - Version string (e.g., "0.1.2", "0.2.0")
-- `report_is_addendum` - Boolean to filter out addendums
-- `report_radiologist_first_name` - Used to filter specific radiologists
-- `is_correct` - String values: `'true'`, `'false'`, `'ERROR'` (used for acceptance rate)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `report_text` | string | Ground truth radiology report |
+| `generated_vlm_output_text` | string | VLM-generated report to evaluate |
+| `generation_version` | string | Version string (e.g., "0.1.2", "0.2.0") |
+| `report_is_addendum` | boolean | Used to filter out addendums |
+| `report_radiologist_first_name` | string | Used to filter specific radiologists |
+| `is_correct` | string | Values: `'true'`, `'false'`, `'ERROR'` |
+| `is_findings_correct` | string | Values: `'true'`, `'false'`, `'ERROR'` |
+| `is_impressions_correct` | string | Values: `'true'`, `'false'`, `'ERROR'` |
+| `is_rad_report_normal` | string | Used for normal/abnormal splits |
+| `parsed_body_part` | JSON string | e.g., `'["Chest"]'` for body part plots |
+
+---
 
 ## Dependencies
 
-- pandas
-- numpy
-- matplotlib
-- packaging
-- green_score (from parent directory)
+```
+pandas
+numpy
+matplotlib
+packaging
+green_score (from parent directory)
+```
+
+---
+
+## Workflow Example
+
+```bash
+# Step 1: Compute GREEN scores (takes time due to LLM inference)
+python analyze_green.py --samples all --split-by-acceptance
+
+# Step 2: Regenerate plots with different settings (fast, no recomputation)
+python plot_green.py --split-by-acceptance
+
+# Step 3: Generate body part and normal/abnormal plots
+python plot_green_by_normal.py --split-by-acceptance
+```

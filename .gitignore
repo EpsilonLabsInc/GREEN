@@ -20,3 +20,9 @@ config.secret.json
 
 green_score.egg-info
 notebooks/
+
+DS_Store
+.DS_Store
+
+pngs/
+*.zip
