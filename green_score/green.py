@@ -155,7 +155,6 @@ class GREEN:
             "(c) Misidentification of a finding's anatomic location/position",
             "(d) Misassessment of the severity of a finding",
             "(e) Mentioning a comparison that isn't in the reference",
-            "(f) Omitting a comparison detailing a change from a prior study",
         ]
         self.prompts = None
         self.completions = None
@@ -601,7 +600,7 @@ class GREEN:
         category_text = re.search(pattern, text, re.DOTALL)
 
         sum_counts = 0
-        sub_counts = [0 for i in range(6)]
+        sub_counts = [0 for i in range(5)]
 
         if not category_text:
             if for_reward:
@@ -617,10 +616,10 @@ class GREEN:
             return sum_counts, sub_counts
         else:
             sub_categories = [s.split(" ", 1)[0] + " " for s in self.sub_categories]
-            matches = sorted(re.findall(r"\([a-f]\) .*", category_text.group(1)))
+            matches = sorted(re.findall(r"\([a-e]\) .*", category_text.group(1)))
 
             if len(matches) == 0:
-                matches = sorted(re.findall(r"\([1-6]\) .*", category_text.group(1)))
+                matches = sorted(re.findall(r"\([1-5]\) .*", category_text.group(1)))
                 sub_categories = [
                     f"({i})" + " " for i in range(1, len(self.sub_categories) + 1)
                 ]
@@ -654,10 +653,10 @@ class GREEN:
                 category_text.group(1).rsplit(":", 1)[-1].rsplit(".", 1)[-1].split(";")
             )
 
-        matches = sorted(re.findall(r"\([a-f]\) .*", category_text.group(1)))
+        matches = sorted(re.findall(r"\([a-e]\) .*", category_text.group(1)))
 
         if len(matches) == 0:
-            matches = sorted(re.findall(r"\([1-6]\) .*", category_text.group(1)))
+            matches = sorted(re.findall(r"\([1-5]\) .*", category_text.group(1)))
             self.sub_categories = [
                 f"({i})" + " " for i in range(1, len(self.sub_categories) + 1)
             ]
