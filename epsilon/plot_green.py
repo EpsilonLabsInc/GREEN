@@ -19,6 +19,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 
 
 def parse_args():
@@ -43,6 +44,16 @@ def parse_args():
         "--split-by-acceptance",
         action="store_true",
         help="Generate separate plots for accepted and rejected samples (default: False)",
+    )
+    parser.add_argument(
+        "--all-correctness",
+        action="store_true",
+        help="Generate plots for all correctness modes (is_findings_correct, is_impressions_correct, is_both_correct). By default only is_correct is plotted.",
+    )
+    parser.add_argument(
+        "--soft-correct",
+        action="store_true",
+        help="Use soft_correct column instead of is_correct for acceptance rate (requires running post_analyze_green.py first)",
     )
     return parser.parse_args()
 
@@ -171,14 +182,20 @@ def generate_plot(
         zorder=5,
     )
 
-    # Plot acceptance rate as a line on primary axis
+    # Plot acceptance rate with error bars on primary axis
     if show_acceptance_rate and acceptance_rates is not None:
-        ax1.plot(
+        # Convert to numpy array and calculate binomial standard error: sqrt(p*(1-p)/n)
+        acceptance_rates = np.array(acceptance_rates, dtype=float)
+        acceptance_sems = np.sqrt(acceptance_rates * (1 - acceptance_rates) / counts)
+        ax1.errorbar(
             x,
             acceptance_rates,
-            "s-",
+            yerr=acceptance_sems,
+            fmt="s-",
             markersize=6,
+            capsize=4,
             color="darkorange",
+            ecolor="darkorange",
             alpha=0.8,
             label="Acceptance Rate",
             zorder=4,
@@ -241,6 +258,36 @@ def generate_plot(
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left")
 
+    # Calculate and display Spearman correlation between GREEN score and acceptance
+    if correctness_column in results_df.columns:
+        # Get valid pairs (non-null GREEN scores and correctness values)
+        valid_mask = (
+            results_df["vlm_green_score"].notna()
+            & results_df[correctness_column].notna()
+        )
+        green_scores = results_df.loc[valid_mask, "vlm_green_score"].values
+        acceptance = results_df.loc[valid_mask, correctness_column].astype(float).values
+
+        if len(green_scores) > 2:  # Need at least 3 points for correlation
+            rho, p_value = spearmanr(green_scores, acceptance)
+            # Display on top right
+            corr_text = (
+                f"Spearman ρ = {rho:.3f}\n(p = {p_value:.2e}, n = {len(green_scores)})"
+            )
+            ax1.text(
+                0.98,
+                0.98,
+                corr_text,
+                transform=ax1.transAxes,
+                ha="right",
+                va="top",
+                fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
+            )
+
+            print(f"Spearman correlation for {correctness_column}:")
+            print(f"  ρ = {rho:.4f}, p-value = {p_value:.4e}, n = {len(green_scores)}")
+
     plt.tight_layout()
 
     # Save plot
@@ -256,6 +303,8 @@ def generate_plots_for_subset(
     subset_name: str,
     file_prefix: str,
     split_by_acceptance: bool = False,
+    all_correctness: bool = False,
+    use_soft_correct: bool = False,
 ):
     """Generate plots for a subset of data.
 
@@ -265,6 +314,7 @@ def generate_plots_for_subset(
         subset_name: Name for plot titles
         file_prefix: Prefix for output filenames
         split_by_acceptance: If True, generate accepted/rejected plots
+        all_correctness: If True, generate plots for all correctness modes
     """
     print(f"\n{'='*60}")
     print(f"Generating plots for: {subset_name}")
@@ -276,12 +326,42 @@ def generate_plots_for_subset(
         return
 
     # Define correctness modes to plot
-    correctness_modes = [
-        ("is_correct", "is_correct_normalized", ""),
-        ("is_findings_correct", "is_findings_correct_normalized", "_findings"),
-        ("is_impressions_correct", "is_impressions_correct_normalized", "_impressions"),
-        ("is_both_correct", "is_both_correct_normalized", "_both"),
-    ]
+    # Default: only is_both_correct (findings AND impressions accepted)
+    # If use_soft_correct: use soft_correct as primary mode
+    if (
+        use_soft_correct
+        and "soft_correct_normalized" in data.columns
+        and data["soft_correct_normalized"].notna().any()
+    ):
+        correctness_modes = [
+            ("soft_correct", "soft_correct_normalized", "_soft_correct"),
+        ]
+    else:
+        correctness_modes = [
+            ("is_both_correct", "is_both_correct_normalized", "_is_both_correct"),
+        ]
+
+    if all_correctness:
+        correctness_modes.extend(
+            [
+                ("is_correct", "is_correct_normalized", "_is_correct"),
+                ("is_findings_correct", "is_findings_correct_normalized", "_findings"),
+                (
+                    "is_impressions_correct",
+                    "is_impressions_correct_normalized",
+                    "_impressions",
+                ),
+            ]
+        )
+        # Add soft_correct if available and not already primary
+        if (
+            not use_soft_correct
+            and "soft_correct_normalized" in data.columns
+            and data["soft_correct_normalized"].notna().any()
+        ):
+            correctness_modes.append(
+                ("soft_correct", "soft_correct_normalized", "_soft_correct")
+            )
 
     for mode_name, col_name, mode_suffix in correctness_modes:
         if col_name not in data.columns:
@@ -354,6 +434,37 @@ def main():
     else:
         data["is_correct_normalized"] = None
 
+    # Normalize soft_correct column (from post_analyze_green.py)
+    if "soft_correct" in data.columns:
+        data["soft_correct_normalized"] = normalize_boolean_column(data["soft_correct"])
+        print(
+            f"soft_correct column found: {data['soft_correct_normalized'].sum()} soft accepted"
+        )
+    else:
+        data["soft_correct_normalized"] = None
+
+    # Create combined soft_correct column that includes is_both_correct=True cases
+    # soft_correct_final = True if is_both_correct=True OR soft_correct=True
+    if "soft_correct_normalized" in data.columns:
+
+        def compute_soft_correct_final(row):
+            # If already accepted by radiologist, it's soft correct
+            if row.get("is_both_correct_normalized") == True:
+                return True
+            # If soft_correct was computed, use that value
+            if pd.notna(row.get("soft_correct_normalized")):
+                return row.get("soft_correct_normalized")
+            # Otherwise, use is_both_correct value (False or None)
+            return row.get("is_both_correct_normalized")
+
+        data["soft_correct_final"] = data.apply(compute_soft_correct_final, axis=1)
+        # Replace soft_correct_normalized with the combined version
+        data["soft_correct_normalized"] = data["soft_correct_final"]
+        soft_true = (data["soft_correct_normalized"] == True).sum()
+        print(
+            f"soft_correct_final (including is_both_correct=True): {soft_true} soft accepted"
+        )
+
     # Normalize is_findings_correct column
     if "is_findings_correct" in data.columns:
         data["is_findings_correct_normalized"] = normalize_boolean_column(
@@ -421,6 +532,8 @@ def main():
         subset_name="All Reports",
         file_prefix="green_all",
         split_by_acceptance=args.split_by_acceptance,
+        all_correctness=args.all_correctness,
+        use_soft_correct=args.soft_correct,
     )
 
     # Generate plots for normal reports
@@ -430,6 +543,8 @@ def main():
         subset_name="Normal Reports",
         file_prefix="green_normal",
         split_by_acceptance=args.split_by_acceptance,
+        all_correctness=args.all_correctness,
+        use_soft_correct=args.soft_correct,
     )
 
     # Generate plots for abnormal reports
@@ -439,6 +554,8 @@ def main():
         subset_name="Abnormal Reports",
         file_prefix="green_abnormal",
         split_by_acceptance=args.split_by_acceptance,
+        all_correctness=args.all_correctness,
+        use_soft_correct=args.soft_correct,
     )
 
     # Generate plots by body part
@@ -482,6 +599,8 @@ def main():
                 subset_name=f"{body_part}",
                 file_prefix=bp_prefix,
                 split_by_acceptance=args.split_by_acceptance,
+                all_correctness=args.all_correctness,
+                use_soft_correct=args.soft_correct,
             )
 
             # Generate plots for normal reports in this body part
@@ -493,6 +612,8 @@ def main():
                     subset_name=f"{body_part} - Normal",
                     file_prefix=f"{bp_prefix}_normal",
                     split_by_acceptance=args.split_by_acceptance,
+                    all_correctness=args.all_correctness,
+                    use_soft_correct=args.soft_correct,
                 )
 
             # Generate plots for abnormal reports in this body part
@@ -504,6 +625,8 @@ def main():
                     subset_name=f"{body_part} - Abnormal",
                     file_prefix=f"{bp_prefix}_abnormal",
                     split_by_acceptance=args.split_by_acceptance,
+                    all_correctness=args.all_correctness,
+                    use_soft_correct=args.soft_correct,
                 )
     else:
         print("Warning: parsed_body_part column not found, skipping body part plots")

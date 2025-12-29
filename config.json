@@ -1,8 +1,8 @@
 {
     "azure_openai": {
         "endpoint": "https://epsilon-eastus-2.openai.azure.com/",
-        "model_name": "gpt-5.1",
-        "deployment": "gpt-5.1",
+        "model_name": "gpt-5.2",
+        "deployment": "gpt-5.2",
         "api_version": "2024-12-01-preview"
     },
     "batch_size": 512,

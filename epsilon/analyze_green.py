@@ -2,8 +2,8 @@
 """
 GREEN Score Analysis Script
 
-Combines data processing and visualization for GREEN score analysis.
-Processes analytics CSV files, computes GREEN scores by version, and generates plots.
+Processes analytics CSV files and computes GREEN scores by version.
+For plotting, use plot_green.py after running this script.
 
 Usage:
     python analyze_green.py                           # Default: sample 3 per version
@@ -13,18 +13,20 @@ Usage:
 """
 
 import argparse
+import re
 import sys
-from collections import Counter
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 from packaging import version as pkg_version
 
 # Add parent directory to path for GREEN import
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from green_score import GREEN
+
+import warnings
+
+warnings.filterwarnings("ignore", message=".*resume_download.*")
 
 
 def parse_args():
@@ -59,17 +61,14 @@ def parse_args():
         help="Minimum version to process (default: 0.1.2)",
     )
     parser.add_argument(
-        "--no-plot", action="store_true", help="Skip generating the plot"
-    )
-    parser.add_argument(
-        "--split-by-acceptance",
-        action="store_true",
-        help="Generate separate plots for accepted and rejected samples (default: False)",
-    )
-    parser.add_argument(
         "--self-check",
         action="store_true",
         help="Perform self-check (report_text vs report_text) sanity check (default: False)",
+    )
+    parser.add_argument(
+        "--use-full-text",
+        action="store_true",
+        help="Compare against generated_report_full_text (with extraction) instead of generated_vlm_output_text (default: False)",
     )
     return parser.parse_args()
 
@@ -134,11 +133,35 @@ def get_versions_to_process(clean_data: pd.DataFrame, min_version: str) -> list:
     return versions
 
 
+def extract_findings_impression_text(report_text: str) -> str:
+    if not isinstance(report_text, str):
+        return ""
+
+    pattern = re.compile(
+        r"FINDINGS:\s*(.*?)\s*IMPRESSION:\s*(.*?)(?:\n{2,}|$)",
+        re.DOTALL | re.IGNORECASE,
+    )
+
+    match = pattern.search(report_text)
+    if not match:
+        return ""
+
+    findings = match.group(1).strip()
+    impression = re.split(
+        r"Electronically Signed|Signed By|Authored By",
+        match.group(2),
+        flags=re.IGNORECASE,
+    )[0].strip()
+
+    return f"FINDINGS:\n{findings}\n\nIMPRESSION:\n{impression}"
+
+
 def compute_green_scores(
     clean_data: pd.DataFrame,
     versions: list,
     samples_per_version: int | None,
     perform_self_check: bool = False,
+    use_full_text: bool = False,
 ) -> pd.DataFrame:
     """Compute GREEN scores for all versions."""
     print("\nInitializing GREEN scorer...")
@@ -161,9 +184,43 @@ def compute_green_scores(
         else:
             print(f"Processing all {len(ver_data)} rows")
 
-        refs = ver_data["report_text"].fillna("").astype(str).tolist()
-        hyps_vlm = ver_data["generated_vlm_output_text"].fillna("").astype(str).tolist()
+        # Extract FINDINGS and IMPRESSION from report_text
+        ver_data["ref_extracted"] = (
+            ver_data["report_text"]
+            .fillna("")
+            .astype(str)
+            .apply(extract_findings_impression_text)
+        )
+        refs = ver_data["ref_extracted"].tolist()
+
+        # Choose hypothesis source based on configuration
+        if use_full_text:
+            # Extract from generated_report_full_text
+            ver_data["hyp_extracted"] = (
+                ver_data["generated_report_full_text"]
+                .fillna("")
+                .astype(str)
+                .apply(extract_findings_impression_text)
+            )
+            hyps_vlm = ver_data["hyp_extracted"].tolist()
+            comparison_source = "generated_report_full_text (extracted)"
+        else:
+            # Use generated_vlm_output_text directly (already contains just findings/impression)
+            hyps_vlm = (
+                ver_data["generated_vlm_output_text"].fillna("").astype(str).tolist()
+            )
+            ver_data["hyp_extracted"] = hyps_vlm  # Store for CSV output
+            comparison_source = "generated_vlm_output_text"
+
         row_numbers = ver_data["row_number"].tolist()
+        ref_extracted_values = ver_data["ref_extracted"].tolist()
+        hyp_extracted_values = ver_data["hyp_extracted"].tolist()
+
+        # print(f"Comparing against: {comparison_source}")
+        # print(ref_extracted_values[:3])
+        # print(ver_data["generated_report_full_text"].tolist()[:3])
+        # print(hyp_extracted_values[:3])
+
         is_correct_values = (
             ver_data["is_correct"].tolist()
             if "is_correct" in ver_data.columns
@@ -172,13 +229,13 @@ def compute_green_scores(
 
         # (1) Optional sanity check: report_text vs report_text
         if perform_self_check:
-            hyps_self = ver_data["report_text"].fillna("").astype(str).tolist()
-            print(f"\n--- (1) Sanity check: report_text vs report_text ---")
+            hyps_self = refs  # Use extracted refs for self-check
+            print(f"\n--- (1) Sanity check: ref_extracted vs ref_extracted ---")
             mean1, std1, scores1, summary1, df1 = green_scorer(refs, hyps_self)
             print(f"Mean score: {mean1:.4f} (should be ~1.0)")
 
-        # (2) Actual comparison: report_text vs generated_vlm_output_text
-        print(f"\n--- Comparison: report_text vs generated_vlm_output_text ---")
+        # (2) Actual comparison
+        print(f"\n--- Comparison: ref_extracted vs {comparison_source} ---")
         mean2, std2, scores2, summary2, df2 = green_scorer(refs, hyps_vlm)
         print(f"Mean score: {mean2:.4f}")
 
@@ -188,6 +245,8 @@ def compute_green_scores(
                 "generation_version": ver,
                 "row_number": row_num,
                 "is_correct": is_correct_values[i],
+                "ref_extracted": ref_extracted_values[i],
+                "hyp_extracted": hyp_extracted_values[i],
                 "vlm_green_score": scores2[i],
                 "vlm_green_analysis": df2["green_analysis"].iloc[i],
             }
@@ -285,177 +344,6 @@ def print_summary(results_df: pd.DataFrame):
     return fine_grained, consolidated
 
 
-def generate_plot(
-    results_df: pd.DataFrame,
-    output_path: str,
-    title_suffix: str = "",
-    file_suffix: str = "",
-    show_acceptance_rate: bool = True,
-    correctness_column: str = "is_correct",
-):
-    """Generate the GREEN scores visualization plot.
-
-    Args:
-        results_df: DataFrame with results
-        output_path: Base output path for the plot
-        title_suffix: Suffix to add to plot title (e.g., " - Accepted Only")
-        file_suffix: Suffix to add to filename (e.g., "_accepted")
-        show_acceptance_rate: Whether to show acceptance rate bars (default True)
-        correctness_column: Column to use for acceptance rate calculation (default: is_correct)
-    """
-    if len(results_df) == 0:
-        print(f"No data to plot{title_suffix}")
-        return
-
-    fine_grained = (
-        results_df.groupby("generation_version")
-        .agg(
-            {
-                "self_green_score": ["mean", "std", "count"],
-                "vlm_green_score": ["mean", "std"],
-            }
-        )
-        .round(4)
-    )
-
-    # Calculate acceptance rate per version based on correctness_column
-    if correctness_column in results_df.columns:
-        # Handle string values: 'true' -> True, everything else ('false', 'ERROR', etc.) -> False
-        is_correct_bool = results_df[correctness_column].apply(
-            lambda x: str(x).lower() == "true" if pd.notna(x) else False
-        )
-        acceptance_rates = (
-            is_correct_bool.groupby(results_df["generation_version"])
-            .mean()
-            .reindex(fine_grained.index)
-            .values
-        )
-    else:
-        acceptance_rates = None
-
-    versions = fine_grained.index.tolist()
-    vlm_means = fine_grained[("vlm_green_score", "mean")].values
-    vlm_stds = fine_grained[("vlm_green_score", "std")].values
-    counts = fine_grained[("self_green_score", "count")].values
-
-    # Calculate Standard Error of the Mean (SEM = std / sqrt(n))
-    vlm_sems = vlm_stds / np.sqrt(counts)
-
-    print("\nComparison of std vs SEM:")
-    for v, std, sem, n in zip(versions, vlm_stds, vlm_sems, counts):
-        print(f"  {v}: std={std:.4f}, SEM={sem:.4f}, n={n}")
-
-    # Create figure with two y-axes
-    fig, ax1 = plt.subplots(figsize=(12, 6))
-    ax2 = ax1.twinx()
-
-    x = np.arange(len(versions))
-    bar_width = 0.35
-
-    # Plot count bars on secondary axis
-    bars_count = ax2.bar(
-        x,
-        counts,
-        bar_width,
-        color="lightgray",
-        alpha=0.7,
-        label="Sample Count",
-    )
-
-    # Plot VLM scores as dots with SEM error bars on primary axis
-    ax1.errorbar(
-        x,
-        vlm_means,
-        yerr=vlm_sems,
-        fmt="o",
-        markersize=8,
-        capsize=5,
-        color="steelblue",
-        ecolor="steelblue",
-        alpha=0.8,
-        label="GREEN Score (VLM vs Reference)",
-        zorder=5,
-    )
-
-    # Plot acceptance rate as a line on primary axis (same 0-1 scale as GREEN score)
-    if show_acceptance_rate and acceptance_rates is not None:
-        ax1.plot(
-            x,
-            acceptance_rates,
-            "s-",
-            markersize=6,
-            color="darkorange",
-            alpha=0.8,
-            label="Acceptance Rate",
-            zorder=4,
-        )
-        # Add acceptance rate labels
-        for i, rate in enumerate(acceptance_rates):
-            ax1.text(
-                x[i] - 0.15,
-                rate,
-                f"{rate:.0%}",
-                ha="right",
-                va="center",
-                fontsize=8,
-                color="darkorange",
-            )
-
-    # Primary axis (GREEN score and acceptance rate share 0-1 scale)
-    ax1.set_xlabel("Version")
-    ax1.set_ylabel("GREEN Score / Acceptance Rate", color="steelblue")
-    ax1.tick_params(axis="y", labelcolor="steelblue")
-    ax1.set_ylim(0, 1.1)
-    ax1.axhline(y=1.0, color="gray", linestyle="--", alpha=0.5)
-    ax1.grid(True, alpha=0.3, zorder=0)
-
-    # Secondary axis (count)
-    ax2.set_ylabel("Sample Count", color="gray")
-    ax2.tick_params(axis="y", labelcolor="gray")
-
-    ax1.set_title(f"GREEN Scores by Version (mean ± SEM){title_suffix}")
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(versions, rotation=45, ha="right")
-
-    # Add value labels next to dots
-    for i, mean in enumerate(vlm_means):
-        ax1.text(
-            x[i] + 0.15,
-            mean,
-            f"{mean:.2f}",
-            ha="left",
-            va="center",
-            fontsize=8,
-            color="steelblue",
-        )
-
-    # Add count labels on bars
-    for i, n in enumerate(counts):
-        ax2.text(
-            x[i],
-            n + max(counts) * 0.02,
-            f"{int(n)}",
-            ha="center",
-            va="bottom",
-            fontsize=7,
-            color="gray",
-        )
-
-    # Combined legend
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left")
-
-    plt.tight_layout()
-
-    # Save plot
-    plot_path = output_path.replace(".csv", f"_plot{file_suffix}.png")
-    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
-    print(f"Plot saved to: {plot_path}")
-
-    plt.close()
-
-
 def main():
     args = parse_args()
 
@@ -485,7 +373,7 @@ def main():
 
     # Compute GREEN scores
     results_df = compute_green_scores(
-        clean_data, versions, samples_per_version, args.self_check
+        clean_data, versions, samples_per_version, args.self_check, args.use_full_text
     )
 
     # Print summary
@@ -493,6 +381,8 @@ def main():
 
     # Merge GREEN scores back to original dataframe
     score_columns = [
+        "ref_extracted",
+        "hyp_extracted",
         "vlm_green_score",
         "vlm_green_analysis",
     ]
@@ -521,88 +411,7 @@ def main():
     print(f"Processed results only saved to: {output_path}")
     print(f"Processed rows: {len(results_df)}")
 
-    # Generate plots
-    if not args.no_plot:
-        # Create pngs subdirectory
-        pngs_dir = Path(output_path).parent / "pngs"
-        pngs_dir.mkdir(parents=True, exist_ok=True)
-        plot_output_path = str(pngs_dir / Path(output_path).name)
-
-        print("\n--- Generating plots ---")
-
-        # Define correctness modes to plot
-        correctness_modes = [
-            ("is_correct", "is_correct", ""),
-            ("is_findings_correct", "is_findings_correct", "_findings"),
-            ("is_impressions_correct", "is_impressions_correct", "_impressions"),
-            ("is_both_correct", None, "_both"),  # Special case: combined
-        ]
-
-        # Add combined column (is_findings_correct AND is_impressions_correct)
-        if (
-            "is_findings_correct" in results_df.columns
-            and "is_impressions_correct" in results_df.columns
-        ):
-            results_df["is_both_correct"] = results_df.apply(
-                lambda row: (
-                    "true"
-                    if (
-                        str(row.get("is_findings_correct", "")).lower() == "true"
-                        and str(row.get("is_impressions_correct", "")).lower() == "true"
-                    )
-                    else "false"
-                ),
-                axis=1,
-            )
-
-        for mode_name, col_name, file_suffix in correctness_modes:
-            # Use mode_name as column if col_name is None (for combined mode)
-            actual_col = col_name if col_name else mode_name
-
-            if actual_col not in results_df.columns:
-                print(f"  Skipping {mode_name}: column not found")
-                continue
-
-            # Plot with acceptance rate for this mode
-            title_suffix = f" ({mode_name})" if mode_name != "is_correct" else ""
-            generate_plot(
-                results_df,
-                plot_output_path,
-                title_suffix=title_suffix,
-                file_suffix=file_suffix,
-                show_acceptance_rate=True,
-                correctness_column=actual_col,
-            )
-
-            # Plot accepted/rejected splits (optional)
-            if args.split_by_acceptance:
-                is_true = results_df[actual_col].apply(
-                    lambda x: str(x).lower() == "true" if pd.notna(x) else False
-                )
-                accepted_df = results_df[is_true]
-                rejected_df = results_df[~is_true]
-
-                if len(accepted_df) > 0:
-                    generate_plot(
-                        accepted_df,
-                        plot_output_path,
-                        title_suffix=f" - Accepted Only ({mode_name})",
-                        file_suffix=f"{file_suffix}_accepted",
-                        show_acceptance_rate=False,
-                        correctness_column=actual_col,
-                    )
-
-                if len(rejected_df) > 0:
-                    generate_plot(
-                        rejected_df,
-                        plot_output_path,
-                        title_suffix=f" - Rejected Only ({mode_name})",
-                        file_suffix=f"{file_suffix}_rejected",
-                        show_acceptance_rate=False,
-                        correctness_column=actual_col,
-                    )
-
-    print("\nAll done!")
+    print("\nAll done! Use plot_green.py to generate plots from the CSV.")
 
 
 if __name__ == "__main__":

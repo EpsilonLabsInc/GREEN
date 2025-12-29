@@ -97,12 +97,13 @@ def load_azure_config(config_path=None):
     return azure_config
 
 
-def tqdm_on_main(*args, **kwargs):
+def tqdm_on_main(total=None, desc="Processing", unit="samples"):
+    """Create a tqdm progress bar on main process only."""
     if is_main_process():
         print("==== Beginning Inference ====")
-        return tqdm(*args, **kwargs)
+        return tqdm(total=total, desc=desc, unit=unit)
     else:
-        return kwargs.get("iterable", None)
+        return None
 
 
 class GREEN:
@@ -380,19 +381,24 @@ class GREEN:
             )
 
         batch_num = 0
-        for batch in tqdm_on_main(
-            iterable=self.dataset.iter(batch_size=self.batch_size),
-            total=len(self.dataset) // self.batch_size,
-        ):
+        pbar = tqdm_on_main(total=len(self.dataset), desc="Inference", unit="samples")
+
+        for batch in self.dataset.iter(batch_size=self.batch_size):
             batch_num += 1
             if self.verbose:
                 print(f"[VERBOSE] Processing batch {batch_num}/{total_batches}...")
             self.prompts.extend(batch["prompt"])
-            self.completions.extend(self._get_azure_response(batch))
+            responses = self._get_azure_response(batch)
+            self.completions.extend(responses)
+            if pbar:
+                pbar.update(len(responses))
             if self.verbose:
                 print(
                     f"[VERBOSE] Batch {batch_num} completed. Total completions: {len(self.completions)}"
                 )
+
+        if pbar:
+            pbar.close()
 
         if is_main_process():
             print("==== End Inference ====")
@@ -580,6 +586,9 @@ class GREEN:
 
     def compute_green(self, response):
         sig_present, sig_errors = self.parse_error_counts(response, self.categories[0])
+        insig_present, insig_errors = self.parse_error_counts(
+            response, self.categories[1]
+        )
         matched_findings, _ = self.parse_error_counts(response, self.categories[2])
 
         if matched_findings == 0:
@@ -588,7 +597,11 @@ class GREEN:
         if sig_present is None or matched_findings is None:
             return None
 
-        return matched_findings / (matched_findings + sum(sig_errors))
+        # Insignificant errors contribute at 50% weight
+        insig_weight = 0.5
+        total_errors = sum(sig_errors) + insig_weight * sum(insig_errors)
+
+        return matched_findings / (matched_findings + total_errors)
 
     def parse_error_counts(self, text, category, for_reward=False):
         if category not in self.categories:
