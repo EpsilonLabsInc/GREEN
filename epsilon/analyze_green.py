@@ -70,6 +70,23 @@ def parse_args():
         action="store_true",
         help="Compare against generated_report_full_text (with extraction) instead of generated_vlm_output_text (default: False)",
     )
+    parser.add_argument(
+        "--ref-column",
+        type=str,
+        default=None,
+        help="Column name for reference text (default: report_text with FINDINGS/IMPRESSION extraction)",
+    )
+    parser.add_argument(
+        "--hyp-column",
+        type=str,
+        default=None,
+        help="Column name for hypothesis text (default: generated_vlm_output_text, or generated_report_full_text with --use-full-text)",
+    )
+    parser.add_argument(
+        "--no-extract",
+        action="store_true",
+        help="Use columns directly without FINDINGS/IMPRESSION extraction (default: False)",
+    )
     return parser.parse_args()
 
 
@@ -162,8 +179,17 @@ def compute_green_scores(
     samples_per_version: int | None,
     perform_self_check: bool = False,
     use_full_text: bool = False,
+    ref_column: str | None = None,
+    hyp_column: str | None = None,
+    no_extract: bool = False,
 ) -> pd.DataFrame:
-    """Compute GREEN scores for all versions."""
+    """Compute GREEN scores for all versions.
+
+    Args:
+        ref_column: Custom column for reference text (default: report_text)
+        hyp_column: Custom column for hypothesis text (default: generated_vlm_output_text)
+        no_extract: If True, use columns directly without FINDINGS/IMPRESSION extraction
+    """
     print("\nInitializing GREEN scorer...")
     green_scorer = GREEN(use_azure=True, verbose=False)
     print("GREEN scorer initialized.")
@@ -184,17 +210,34 @@ def compute_green_scores(
         else:
             print(f"Processing all {len(ver_data)} rows")
 
-        # Extract FINDINGS and IMPRESSION from report_text
-        ver_data["ref_extracted"] = (
-            ver_data["report_text"]
-            .fillna("")
-            .astype(str)
-            .apply(extract_findings_impression_text)
-        )
+        # Extract reference text
+        ref_col = ref_column or "report_text"
+        if no_extract:
+            ver_data["ref_extracted"] = ver_data[ref_col].fillna("").astype(str)
+        else:
+            ver_data["ref_extracted"] = (
+                ver_data[ref_col]
+                .fillna("")
+                .astype(str)
+                .apply(extract_findings_impression_text)
+            )
         refs = ver_data["ref_extracted"].tolist()
 
         # Choose hypothesis source based on configuration
-        if use_full_text:
+        if hyp_column:
+            # Use custom hypothesis column
+            if no_extract:
+                ver_data["hyp_extracted"] = ver_data[hyp_column].fillna("").astype(str)
+            else:
+                ver_data["hyp_extracted"] = (
+                    ver_data[hyp_column]
+                    .fillna("")
+                    .astype(str)
+                    .apply(extract_findings_impression_text)
+                )
+            hyps_vlm = ver_data["hyp_extracted"].tolist()
+            comparison_source = f"{hyp_column}{'' if no_extract else ' (extracted)'}"
+        elif use_full_text:
             # Extract from generated_report_full_text
             ver_data["hyp_extracted"] = (
                 ver_data["generated_report_full_text"]
@@ -373,7 +416,14 @@ def main():
 
     # Compute GREEN scores
     results_df = compute_green_scores(
-        clean_data, versions, samples_per_version, args.self_check, args.use_full_text
+        clean_data,
+        versions,
+        samples_per_version,
+        args.self_check,
+        args.use_full_text,
+        args.ref_column,
+        args.hyp_column,
+        args.no_extract,
     )
 
     # Print summary

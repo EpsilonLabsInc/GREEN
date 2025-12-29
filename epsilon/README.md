@@ -67,9 +67,11 @@ python analyze_green.py --input /path/to/analytics.csv
 | `--samples` | `-s` | `3` | Number of samples per version, or `all` for all samples |
 | `--output` | `-o` | `green_scores_by_version.csv` | Path to output CSV file |
 | `--min-version` | | `0.1.2` | Minimum version to process |
-| `--no-plot` | | | Skip generating plots |
-| `--split-by-acceptance` | | | Generate separate plots for accepted/rejected samples |
 | `--self-check` | | | Perform self-check (report vs itself) sanity check |
+| `--use-full-text` | | | Compare against `generated_report_full_text` (with extraction) instead of `generated_vlm_output_text` |
+| `--ref-column` | | `report_text` | Column name for reference text |
+| `--hyp-column` | | `generated_vlm_output_text` | Column name for hypothesis text |
+| `--no-extract` | | | Use columns directly without FINDINGS/IMPRESSION extraction |
 
 ### Examples
 
@@ -83,11 +85,14 @@ python analyze_green.py --samples all --output /tmp/results.csv
 # Process only versions >= 0.2.0
 python analyze_green.py --min-version 0.2.0
 
-# Run with self-check and acceptance split
-python analyze_green.py --samples all --self-check --split-by-acceptance
+# Run with self-check
+python analyze_green.py --samples all --self-check
 
-# Run without plots (headless mode)
-python analyze_green.py --no-plot
+# Use custom columns for comparison
+python analyze_green.py --ref-column my_reference_col --hyp-column my_hypothesis_col
+
+# Use columns directly without FINDINGS/IMPRESSION extraction
+python analyze_green.py --ref-column col1 --hyp-column col2 --no-extract
 
 # Run in background with all samples
 nohup python analyze_green.py --samples all > output.log 2>&1 &
