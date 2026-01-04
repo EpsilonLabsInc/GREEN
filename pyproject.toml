@@ -4,10 +4,7 @@ version = "0.0.12"
 description = "GREEN: Generative Radiology Report Evaluation and Error Notation"
 readme = "README.md"
 license = { text = "MIT" }
-authors = [
-    { name = "Sophie Ostmeier" },
-    { name = "Jean-Benoit Delbrouck" },
-]
+authors = [{ name = "Sophie Ostmeier" }, { name = "Jean-Benoit Delbrouck" }]
 requires-python = ">=3.12,<3.13"
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -17,37 +14,29 @@ classifiers = [
 ]
 
 dependencies = [
-    "torch==2.2.2",
-    "transformers==4.40.0",
-    "accelerate==0.30.1",
-    "pillow==10.3.0",
-    "sentencepiece==0.2.0",
-    "sentence-transformers==3.0.1",
-    "datasets==3.2.0",
-    "torchvision==0.17.2",
-    "opencv-python==4.10.0.84",
-    "dill==0.3.9",
-    "protobuf==5.29.1",
-    "scipy",
-    "matplotlib",
-    "scikit-learn",
-    "pandas",
-    "numpy<2",
-    "openai>=1.0.0",
-    "packaging",
+    "torch==2.5.1",
+    "transformers==4.49.0",
+    "accelerate==1.10.1",
+    "pillow==11.3.0",
+    "sentencepiece==0.1.99",
+    "sentence-transformers>=3.0.1",
+    "datasets==4.1.1",
+    "torchvision==0.20.1",
+    "opencv-python==4.11.0.86",
+    "dill==0.4.0",
+    "protobuf==6.33.1",
+    "scipy==1.16.2",
+    "matplotlib==3.10.6",
+    "scikit-learn==1.7.2",
+    "pandas==2.3.2",
+    "numpy==2.3.3",
+    "openai==1.109.1",
+    "packaging==25.0",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest",
-    "ruff",
-]
-training = [
-    "deepspeed",
-    "peft",
-    "flash-attn",
-    "wandb",
-]
+dev = ["pytest", "ruff"]
+training = ["deepspeed", "peft", "flash-attn", "wandb"]
 
 [build-system]
 requires = ["hatchling"]
@@ -57,10 +46,7 @@ build-backend = "hatchling.build"
 packages = ["green_score"]
 
 [tool.uv]
-dev-dependencies = [
-    "pytest",
-    "ruff",
-]
+dev-dependencies = ["pytest", "ruff"]
 
 [tool.ruff]
 line-length = 88
