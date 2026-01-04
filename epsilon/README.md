@@ -33,15 +33,16 @@ $$\text{GREEN Score} = \frac{\text{Matched Findings}}{\text{Matched Findings} + 
 
 | Script | Purpose |
 |--------|---------|
-| `analyze_green.py` | Compute GREEN scores from raw analytics CSV |
+| `compute_green_analytics.py` | Compute GREEN scores from raw analytics CSV (with version filtering, addendum exclusion) |
+| `compute_green_general.py` | Compute GREEN scores from any CSV with ref/hyp columns (no special filtering) |
 | `plot_green.py` | Regenerate plots from existing CSV (no recomputation) |
 | `plot_green_by_normal.py` | Generate plots split by normal/abnormal reports and body part |
 
 ---
 
-## 1. analyze_green.py - Compute GREEN Scores
+## 1. compute_green_analytics.py - Compute GREEN Scores (Analytics CSV)
 
-Processes analytics CSV files, computes GREEN scores using the GREEN model, and generates plots.
+Processes analytics CSV files with special filtering (excludes addendums, specific radiologists, etc.), computes GREEN scores by version.
 
 ### Usage
 
@@ -50,13 +51,13 @@ Processes analytics CSV files, computes GREEN scores using the GREEN model, and 
 cd /Users/ruian/projects/epsilonlabs/GREEN/epsilon
 
 # Run with defaults (3 samples per version for testing)
-python analyze_green.py
+python compute_green_analytics.py
 
 # Run all samples (full analysis)
-python analyze_green.py --samples all
+python compute_green_analytics.py --samples all
 
 # Use a specific input file
-python analyze_green.py --input /path/to/analytics.csv
+python compute_green_analytics.py --input /path/to/analytics.csv
 ```
 
 ### Arguments
@@ -77,25 +78,25 @@ python analyze_green.py --input /path/to/analytics.csv
 
 ```bash
 # Sample 50 rows per version
-python analyze_green.py --samples 50
+python compute_green_analytics.py --samples 50
 
 # Run all samples with custom output
-python analyze_green.py --samples all --output /tmp/results.csv
+python compute_green_analytics.py --samples all --output /tmp/results.csv
 
 # Process only versions >= 0.2.0
-python analyze_green.py --min-version 0.2.0
+python compute_green_analytics.py --min-version 0.2.0
 
 # Run with self-check
-python analyze_green.py --samples all --self-check
+python compute_green_analytics.py --samples all --self-check
 
 # Use custom columns for comparison
-python analyze_green.py --ref-column my_reference_col --hyp-column my_hypothesis_col
+python compute_green_analytics.py --ref-column my_reference_col --hyp-column my_hypothesis_col
 
 # Use columns directly without FINDINGS/IMPRESSION extraction
-python analyze_green.py --ref-column col1 --hyp-column col2 --no-extract
+python compute_green_analytics.py --ref-column col1 --hyp-column col2 --no-extract
 
 # Run in background with all samples
-nohup python analyze_green.py --samples all > output.log 2>&1 &
+nohup python compute_green_analytics.py --samples all > output.log 2>&1 &
 ```
 
 ### Output Files
@@ -105,21 +106,6 @@ nohup python analyze_green.py --samples all > output.log 2>&1 &
 |------|-------------|
 | `green_scores_by_version.csv` | Processed results only (rows that passed filtering) |
 | `green_scores_by_version_full.csv` | All original rows with `kept_for_green` column and GREEN scores merged |
-
-#### Plots (in `pngs/` subfolder)
-
-For each correctness mode, the following plots are generated:
-
-| Mode | Base File | Description |
-|------|-----------|-------------|
-| `is_correct` | `*_plot.png` | Based on overall correctness |
-| `is_findings_correct` | `*_plot_findings.png` | Based on findings section correctness |
-| `is_impressions_correct` | `*_plot_impressions.png` | Based on impressions section correctness |
-| `is_both_correct` | `*_plot_both.png` | Both findings AND impressions correct |
-
-With `--split-by-acceptance`, each mode also generates:
-- `*_accepted.png` - Accepted samples only
-- `*_rejected.png` - Rejected samples only
 
 ### Data Filtering
 
@@ -133,7 +119,53 @@ The `kept_for_green` column in the full output indicates whether each row was in
 
 ---
 
-## 2. plot_green.py - Regenerate Plots
+## 2. compute_green_general.py - Compute GREEN Scores (Any CSV)
+
+Simple GREEN scorer for any CSV file with reference and hypothesis columns. No special filtering or version handling.
+
+### Usage
+
+```bash
+# Basic usage with analytics CSV (same columns as compute_green_analytics.py)
+python compute_green_general.py -i /Users/ruian/Downloads/ANALYTICS_MOST_RECENT.csv \
+    -r report_text -y generated_vlm_output_text
+
+# With custom output path
+python compute_green_general.py -i /Users/ruian/Downloads/ANALYTICS_MOST_RECENT.csv \
+    -r report_text -y generated_vlm_output_text -o scores.csv
+
+# With batching for large files
+python compute_green_general.py -i /Users/ruian/Downloads/ANALYTICS_MOST_RECENT.csv \
+    -r report_text -y generated_vlm_output_text --batch-size 100
+
+# Verbose mode
+python compute_green_general.py -i /Users/ruian/Downloads/ANALYTICS_MOST_RECENT.csv \
+    -r report_text -y generated_vlm_output_text -v
+```
+
+### Arguments
+
+| Argument | Short | Default | Description |
+|----------|-------|---------|-------------|
+| `--input` | `-i` | (required) | Path to input CSV file |
+| `--ref-column` | `-r` | (required) | Column name for reference text |
+| `--hyp-column` | `-y` | (required) | Column name for hypothesis text |
+| `--output` | `-o` | `{input}_with_green_scores.csv` | Path to output CSV file |
+| `--batch-size` | `-b` | None | Process in batches (for large files) |
+| `--verbose` | `-v` | | Show verbose output |
+
+### Output Columns Added
+
+| Column | Description |
+|--------|-------------|
+| `green_score` | GREEN score (0 to 1) |
+| `green_analysis` | Full analysis text from GREEN model |
+| `green_(a)` to `green_(f)` | Error counts by category |
+| `green_Matched Findings` | Number of matched findings |
+
+---
+
+## 3. plot_green.py - Regenerate Plots
 
 Regenerates plots from an existing `green_scores_by_version_full.csv` without recomputing GREEN scores.
 
@@ -256,7 +288,7 @@ green_score (from parent directory)
 
 ```bash
 # Step 1: Compute GREEN scores (takes time due to LLM inference)
-python analyze_green.py --samples all --split-by-acceptance
+python compute_green_analytics.py --samples all
 
 # Step 2: Regenerate plots with different settings (fast, no recomputation)
 python plot_green.py --split-by-acceptance
