@@ -94,6 +94,13 @@ def binary_search_optimal_kmeans(data, min_k, max_k):
 
         kmeans = KMeans(n_clusters=mid_k, random_state=42).fit(data)
         labels = kmeans.labels_
+
+        # silhouette_score requires at least 2 distinct clusters
+        n_unique_labels = len(set(labels))
+        if n_unique_labels < 2:
+            max_k = mid_k - 1
+            continue
+
         score = silhouette_score(data, labels)
 
         if score > best_score:
