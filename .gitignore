@@ -26,3 +26,7 @@ DS_Store
 
 pngs/
 *.zip
+
+# uv
+.python-version
+uv.lock
