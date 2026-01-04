@@ -127,19 +127,19 @@ Simple GREEN scorer for any CSV file with reference and hypothesis columns. No s
 
 ```bash
 # Basic usage with analytics CSV (same columns as compute_green_analytics.py)
-python compute_green_general.py -i /Users/ruian/Downloads/ANALYTICS_MOST_RECENT.csv \
+python compute_green_general.py -i test_data/ANALYTICS_MOST_RECENT_256.csv \
     -r report_text -y generated_vlm_output_text
 
 # With custom output path
-python compute_green_general.py -i /Users/ruian/Downloads/ANALYTICS_MOST_RECENT.csv \
+python compute_green_general.py -i test_data/ANALYTICS_MOST_RECENT_256.csv \
     -r report_text -y generated_vlm_output_text -o scores.csv
 
 # With batching for large files
-python compute_green_general.py -i /Users/ruian/Downloads/ANALYTICS_MOST_RECENT.csv \
+python compute_green_general.py -i test_data/ANALYTICS_MOST_RECENT_256.csv \
     -r report_text -y generated_vlm_output_text --batch-size 100
 
 # Verbose mode
-python compute_green_general.py -i /Users/ruian/Downloads/ANALYTICS_MOST_RECENT.csv \
+python compute_green_general.py -i test_data/ANALYTICS_MOST_RECENT_256.csv \
     -r report_text -y generated_vlm_output_text -v
 ```
 
