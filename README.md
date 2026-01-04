@@ -19,14 +19,22 @@ pip install -e .
 
 ## Usage
 
-To use Azure, create a config.secret.json file with
+To use Azure, copy the example config and add your API key:
+```bash
+cp config.secret.example.json config.secret.json
+# Edit config.secret.json and add your Azure OpenAI API key
 ```
+
+The file should look like:
+```json
 {
     "azure_openai": {
-        "api_key": <your-api-key>
+        "api_key": "YOUR_AZURE_OPENAI_API_KEY_HERE"
     }
 }
 ```
+
+> **Note:** `config.secret.json` is in `.gitignore` and will not be committed.
 
 ```python
 from green_score import GREEN
