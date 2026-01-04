@@ -17,7 +17,6 @@ setup(
         "transformers==4.40.0",
         "accelerate==0.30.1",
         "pillow==10.3.0",
-        "sentencepiece==0.2.0",
         "sentence-transformers==3.0.1",
         "datasets==3.2.0",
         "torchvision==0.17.2",
